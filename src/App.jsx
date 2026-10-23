@@ -1700,7 +1700,7 @@ export default function App() {
       <header className="topbar">
         <div>
           <h1>Мои деньги</h1>
-          <div className="muted small">Версия 1.8.1</div>
+          <div className="muted small">Версия 1.8.2</div>
         </div>
         <div className="topbar-actions">
           <button className="primary compact top-add-expense" onClick={jumpToNewExpense}>
