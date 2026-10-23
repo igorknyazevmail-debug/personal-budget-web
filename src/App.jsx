@@ -236,7 +236,7 @@ function Login({ onReady }) {
   return (
     <div className="auth-wrap">
       <form className="card auth-card" onSubmit={sendMagicLink}>
-        <h1>Мой бюджет</h1>
+        <h1>Мои деньги</h1>
         <p className="muted">Вход по ссылке на email</p>
         <input
           type="email"
@@ -1228,8 +1228,8 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <h1>Мой бюджет</h1>
-          <div className="muted small">Версия 1.5.1</div>
+          <h1>Мои деньги</h1>
+          <div className="muted small">Версия 1.5.2</div>
         </div>
         <button className="secondary compact" onClick={() => supabase.auth.signOut()}>
           Выйти
