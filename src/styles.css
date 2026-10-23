@@ -809,3 +809,70 @@ input:focus, select:focus {
     width: 100%;
   }
 }
+
+
+/* v1.8.1 — compact account menu */
+.account-menu {
+  position: relative;
+}
+.account-menu > summary {
+  list-style: none;
+}
+.account-menu > summary::-webkit-details-marker {
+  display: none;
+}
+.account-menu-button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+.account-menu-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 50;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .14);
+}
+.account-menu-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: transparent;
+  color: #111827;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.account-menu-item:hover {
+  background: #f3f4f6;
+}
+.danger-menu-item {
+  color: #b91c1c;
+}
+.danger-menu-item:hover {
+  background: #fef2f2;
+}
+
+@media (max-width: 650px) {
+  .topbar-actions {
+    width: auto;
+  }
+  .account-menu-popover {
+    right: 0;
+  }
+}

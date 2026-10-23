@@ -1700,25 +1700,39 @@ export default function App() {
       <header className="topbar">
         <div>
           <h1>Мои деньги</h1>
-          <div className="muted small">Версия 1.8.0</div>
+          <div className="muted small">Версия 1.8.1</div>
         </div>
         <div className="topbar-actions">
           <button className="primary compact top-add-expense" onClick={jumpToNewExpense}>
             + Добавить расход
           </button>
-          <button
-            className="secondary compact"
-            onClick={() => {
-              setShowPasswordPanel((value) => !value)
-              setPasswordMessage('')
-              setPasswordError('')
-            }}
-          >
-            Пароль
-          </button>
-          <button className="secondary compact" onClick={() => supabase.auth.signOut()}>
-            Выйти
-          </button>
+          <details className="account-menu">
+            <summary className="secondary compact account-menu-button" aria-label="Меню аккаунта" title="Меню аккаунта">
+              ⋮
+            </summary>
+            <div className="account-menu-popover">
+              <button
+                className="account-menu-item"
+                onClick={(e) => {
+                  setShowPasswordPanel((value) => !value)
+                  setPasswordMessage('')
+                  setPasswordError('')
+                  e.currentTarget.closest('details')?.removeAttribute('open')
+                }}
+              >
+                Сменить пароль
+              </button>
+              <button
+                className="account-menu-item danger-menu-item"
+                onClick={(e) => {
+                  e.currentTarget.closest('details')?.removeAttribute('open')
+                  supabase.auth.signOut()
+                }}
+              >
+                Выйти
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
