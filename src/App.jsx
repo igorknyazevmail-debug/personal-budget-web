@@ -215,43 +215,103 @@ function getPeriodRanges(period, customFrom, customTo) {
   }
 }
 
-function Login({ onReady }) {
+function Login() {
+  const [mode, setMode] = useState('signin')
   const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
 
-  async function sendMagicLink(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    if (!email.trim()) return
-    setLoading(true)
-    setMessage('')
+    const normalizedEmail = email.trim()
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
+    setMessage('')
+    setError('')
+
+    if (!normalizedEmail) {
+      setError('Введите email.')
+      return
+    }
+
+    if (password.length < 6) {
+      setError('Пароль должен содержать не менее 6 символов.')
+      return
+    }
+
+    setLoading(true)
+
+    if (mode === 'signup') {
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: normalizedEmail,
+        password,
+      })
+
+      setLoading(false)
+
+      if (signUpError) {
+        setError(signUpError.message)
+        return
+      }
+
+      if (data.session) {
+        setMessage('Аккаунт создан. Вход выполнен.')
+      } else {
+        setMessage('Аккаунт создан. Если в Supabase включено подтверждение email, подтвердите адрес в письме, затем войдите.')
+      }
+      return
+    }
+
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password,
     })
 
     setLoading(false)
-    setMessage(error ? error.message : 'Ссылка для входа отправлена на email.')
+
+    if (signInError) {
+      setError('Не удалось войти. Проверьте email и пароль.')
+    }
+  }
+
+  function switchMode() {
+    setMode((current) => current === 'signin' ? 'signup' : 'signin')
+    setMessage('')
+    setError('')
   }
 
   return (
     <div className="auth-wrap">
-      <form className="card auth-card" onSubmit={sendMagicLink}>
+      <form className="card auth-card" onSubmit={handleSubmit}>
         <h1>Мои деньги</h1>
-        <p className="muted">Вход по ссылке на email</p>
+        <p className="muted">
+          {mode === 'signin' ? 'Вход по email и паролю' : 'Регистрация по email и паролю'}
+        </p>
         <input
           type="email"
+          autoComplete="email"
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
         />
+        <input
+          type="password"
+          autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+          placeholder="Пароль"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        <div className="muted tiny">Минимум 6 символов</div>
         <button className="primary" disabled={loading}>
-          {loading ? 'Отправка…' : 'Войти'}
+          {loading
+            ? (mode === 'signin' ? 'Вход…' : 'Регистрация…')
+            : (mode === 'signin' ? 'Войти' : 'Зарегистрироваться')}
         </button>
+        {error && <div className="error">{error}</div>}
         {message && <div className="notice">{message}</div>}
-        <button type="button" className="link-button" onClick={onReady}>
-          Проверить вход
+        <button type="button" className="link-button" onClick={switchMode} disabled={loading}>
+          {mode === 'signin' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
         </button>
       </form>
     </div>
@@ -261,6 +321,11 @@ function Login({ onReady }) {
 export default function App() {
   const [session, setSession] = useState(null)
   const [loadingSession, setLoadingSession] = useState(true)
+  const [showPasswordPanel, setShowPasswordPanel] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordMessage, setPasswordMessage] = useState('')
+  const [passwordError, setPasswordError] = useState('')
   const [expenses, setExpenses] = useState([])
   const [previousExpenses, setPreviousExpenses] = useState([])
   const [incomes, setIncomes] = useState([])
@@ -271,6 +336,10 @@ export default function App() {
   const [accountBalances, setAccountBalances] = useState({})
   const [transfers, setTransfers] = useState([])
   const [accountError, setAccountError] = useState('')
+  const [minimumError, setMinimumError] = useState('')
+  const [minimumSaving, setMinimumSaving] = useState(false)
+  const [necessaryMinimum, setNecessaryMinimum] = useState(0)
+  const [necessaryMinimumInput, setNecessaryMinimumInput] = useState('')
   const [transferError, setTransferError] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -350,6 +419,7 @@ export default function App() {
     loadCategories()
     loadIncomeCategories()
     loadAccounts()
+    loadFinancialSettings()
     loadTransfers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, period, customFrom, customTo])
@@ -402,6 +472,65 @@ export default function App() {
       setTransferToAccountId(accounts.find((item) => item.id !== transferFromAccountId)?.id || accounts[0].id)
     }
   }, [accounts, expenseAccountId, incomeAccountId, transferFromAccountId, transferToAccountId])
+
+  async function loadFinancialSettings() {
+    if (!session?.user) return
+    setMinimumError('')
+
+    const { data, error: queryError } = await supabase
+      .from('budget_financial_settings')
+      .select('necessary_minimum')
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+
+    if (queryError) {
+      setMinimumError(
+        queryError.message.includes('budget_financial_settings')
+          ? 'Нужно выполнить SQL-обновление базы данных для версии 1.7.0.'
+          : queryError.message,
+      )
+      return
+    }
+
+    const value = Number(data?.necessary_minimum || 0)
+    setNecessaryMinimum(value)
+    setNecessaryMinimumInput(value > 0 ? String(value).replace('.', ',') : '')
+  }
+
+  async function saveNecessaryMinimum(event) {
+    event?.preventDefault()
+    if (!session?.user) return
+    setMinimumError('')
+
+    const raw = String(necessaryMinimumInput || '').trim().replace(',', '.')
+    const value = raw === '' ? 0 : Number(raw)
+    if (!Number.isFinite(value) || value < 0) {
+      setMinimumError('Необходимый минимум должен быть числом не меньше 0.')
+      return
+    }
+
+    setMinimumSaving(true)
+    const { error: saveError } = await supabase
+      .from('budget_financial_settings')
+      .upsert({
+        user_id: session.user.id,
+        necessary_minimum: value,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' })
+
+    setMinimumSaving(false)
+    if (saveError) {
+      setMinimumError(
+        saveError.message.includes('budget_financial_settings')
+          ? 'Нужно выполнить SQL-обновление базы данных для версии 1.7.0.'
+          : saveError.message,
+      )
+      return
+    }
+
+    setNecessaryMinimum(value)
+    setNecessaryMinimumInput(value > 0 ? String(value).replace('.', ',') : '')
+  }
 
   async function loadAccounts() {
     if (!session?.user) return
@@ -805,6 +934,18 @@ export default function App() {
     setNote('')
     if (managedCategoryNames.length) setCategory(managedCategoryNames[0])
     if (accounts.length) setExpenseAccountId(accounts[0].id)
+  }
+
+  function jumpToNewExpense() {
+    if (editingExpenseId) resetExpenseForm()
+
+    window.requestAnimationFrame(() => {
+      document.querySelector('.expense-editor')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      })
+      window.setTimeout(() => document.getElementById('expense-amount')?.focus(), 350)
+    })
   }
 
   async function saveExpense(e) {
@@ -1419,6 +1560,21 @@ export default function App() {
     [accounts, accountBalances],
   )
 
+  const minimumStats = useMemo(() => {
+    const minimum = Number(necessaryMinimum || 0)
+    if (minimum <= 0) {
+      return { minimum: 0, deviation: null, coverage: null, status: 'not-set' }
+    }
+    const deviation = accountsTotal - minimum
+    const coverage = (accountsTotal / minimum) * 100
+    return {
+      minimum,
+      deviation,
+      coverage,
+      status: deviation >= 0 ? 'above' : 'below',
+    }
+  }, [accountsTotal, necessaryMinimum])
+
   const visibleTransfers = useMemo(() => {
     if (accountFilter === 'all') return transfers
     return transfers.filter((item) => item.from_account_id === accountFilter || item.to_account_id === accountFilter)
@@ -1513,20 +1669,83 @@ export default function App() {
       ? 'cashflow-positive'
       : 'cashflow-negative'
 
+  async function savePassword(e) {
+    e.preventDefault()
+    setPasswordMessage('')
+    setPasswordError('')
+
+    if (newPassword.length < 6) {
+      setPasswordError('Пароль должен содержать не менее 6 символов.')
+      return
+    }
+
+    setPasswordSaving(true)
+    const { error: updateError } = await supabase.auth.updateUser({ password: newPassword })
+    setPasswordSaving(false)
+
+    if (updateError) {
+      setPasswordError(updateError.message)
+      return
+    }
+
+    setNewPassword('')
+    setPasswordMessage('Пароль сохранён. Теперь можно входить по email и паролю.')
+  }
+
   if (loadingSession) return <div className="center">Загрузка…</div>
-  if (!session) return <Login onReady={() => window.location.reload()} />
+  if (!session) return <Login />
 
   return (
     <div className="app-shell">
       <header className="topbar">
         <div>
           <h1>Мои деньги</h1>
-          <div className="muted small">Версия 1.6.0</div>
+          <div className="muted small">Версия 1.8.0</div>
         </div>
-        <button className="secondary compact" onClick={() => supabase.auth.signOut()}>
-          Выйти
-        </button>
+        <div className="topbar-actions">
+          <button className="primary compact top-add-expense" onClick={jumpToNewExpense}>
+            + Добавить расход
+          </button>
+          <button
+            className="secondary compact"
+            onClick={() => {
+              setShowPasswordPanel((value) => !value)
+              setPasswordMessage('')
+              setPasswordError('')
+            }}
+          >
+            Пароль
+          </button>
+          <button className="secondary compact" onClick={() => supabase.auth.signOut()}>
+            Выйти
+          </button>
+        </div>
       </header>
+
+      {showPasswordPanel && (
+        <section className="card password-card">
+          <div>
+            <div className="section-title">Пароль для входа</div>
+            <div className="muted small">
+              Для аккаунта, который раньше входил через Magic Link, здесь можно один раз задать пароль.
+            </div>
+          </div>
+          <form className="password-form" onSubmit={savePassword}>
+            <input
+              type="password"
+              autoComplete="new-password"
+              placeholder="Новый пароль (минимум 6 символов)"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+            <button className="primary compact" disabled={passwordSaving}>
+              {passwordSaving ? 'Сохранение…' : 'Сохранить пароль'}
+            </button>
+          </form>
+          {passwordError && <div className="error">{passwordError}</div>}
+          {passwordMessage && <div className="notice success-notice">{passwordMessage}</div>}
+        </section>
+      )}
 
       <section className="card filters-card">
         <div className="field">
@@ -1579,6 +1798,64 @@ export default function App() {
             <strong>{formatMoney(accountsTotal)}</strong>
           </div>
         </div>
+
+        <div className="minimum-grid">
+          <div className="minimum-card">
+            <span className="muted">Необходимый минимум</span>
+            <strong>{minimumStats.minimum > 0 ? formatMoney(minimumStats.minimum) : 'Не задан'}</strong>
+            <small className="muted">Финансовый порог для общей суммы на всех счетах</small>
+          </div>
+          <div className={`minimum-card ${minimumStats.status === 'above' ? 'minimum-positive' : minimumStats.status === 'below' ? 'minimum-negative' : ''}`}>
+            <span className="muted">Отклонение от минимума</span>
+            <strong>
+              {minimumStats.deviation === null
+                ? '—'
+                : `${minimumStats.deviation >= 0 ? '+' : ''}${formatMoney(minimumStats.deviation)}`}
+            </strong>
+            <small className="muted">
+              {minimumStats.deviation === null
+                ? 'Задай необходимый минимум ниже'
+                : minimumStats.deviation >= 0
+                  ? `Запас выше минимума · покрытие ${minimumStats.coverage.toFixed(1)}%`
+                  : `Дефицит до минимума · покрытие ${Math.max(0, minimumStats.coverage).toFixed(1)}%`}
+            </small>
+          </div>
+        </div>
+
+        {minimumStats.minimum > 0 && (
+          <div className="minimum-progress-wrap" aria-label="Покрытие необходимого минимума">
+            <div className="minimum-progress-track">
+              <div
+                className={`minimum-progress-fill ${minimumStats.status === 'below' ? 'minimum-progress-danger' : 'minimum-progress-good'}`}
+                style={{ width: `${Math.max(0, Math.min(100, minimumStats.coverage))}%` }}
+              />
+            </div>
+            <div className="muted tiny minimum-progress-caption">
+              {formatMoney(accountsTotal)} из {formatMoney(minimumStats.minimum)} · {Math.max(0, minimumStats.coverage).toFixed(1)}%
+            </div>
+          </div>
+        )}
+
+        <details className="minimum-settings">
+          <summary>Настроить необходимый минимум</summary>
+          <form className="minimum-form" onSubmit={saveNecessaryMinimum}>
+            <div className="field">
+              <label>Необходимый минимум, €</label>
+              <input
+                inputMode="decimal"
+                placeholder="Например, 3000"
+                value={necessaryMinimumInput}
+                onChange={(e) => setNecessaryMinimumInput(e.target.value)}
+              />
+            </div>
+            <button className="secondary" disabled={minimumSaving}>
+              {minimumSaving ? 'Сохранение…' : 'Сохранить минимум'}
+            </button>
+          </form>
+          <div className="muted tiny">0 или пустое значение отключает ориентир.</div>
+        </details>
+
+        {minimumError && <div className="error">{minimumError}</div>}
         {accountError && <div className="error">{accountError}</div>}
         <div className="accounts-grid">
           {accounts.map((item) => (
@@ -2175,6 +2452,7 @@ export default function App() {
           <div className="field">
             <label>Сумма, €</label>
             <input
+              id="expense-amount"
               inputMode="decimal"
               placeholder="0,00"
               value={amount}

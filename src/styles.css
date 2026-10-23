@@ -25,6 +25,16 @@ button { cursor: pointer; }
   margin-bottom: 14px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.top-add-expense {
+  white-space: nowrap;
+}
+
 h1 { margin: 0; font-size: 24px; }
 
 .card {
@@ -327,7 +337,9 @@ input:focus, select:focus {
 @media (max-width: 650px) {
   .app-shell { width: min(100% - 14px, 1100px); padding-top: 10px; }
   .card { padding: 12px; border-radius: 12px; margin-bottom: 9px; }
-  .topbar { margin-bottom: 9px; }
+  .topbar { margin-bottom: 9px; align-items: flex-start; flex-wrap: wrap; }
+  .topbar-actions { width: 100%; gap: 6px; flex-wrap: wrap; }
+  .top-add-expense { flex: 1; padding-left: 10px; padding-right: 10px; }
   h1 { font-size: 23px; }
 
   .summary-grid,
@@ -710,4 +722,90 @@ input:focus, select:focus {
   .accounts-total { text-align: left; }
   .account-add-form { grid-template-columns: 1fr; }
   .account-add-form button { grid-column: 1; }
+}
+
+/* v1.7.0 — necessary minimum */
+.minimum-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin-bottom: 10px;
+}
+.minimum-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 11px;
+  background: #fafafa;
+  padding: 11px 12px;
+  min-width: 0;
+}
+.minimum-card span,
+.minimum-card strong,
+.minimum-card small { display: block; }
+.minimum-card strong { font-size: 21px; margin: 3px 0 2px; }
+.minimum-card.minimum-positive { background: #f0fdf4; border-color: #bbf7d0; }
+.minimum-card.minimum-positive strong { color: #047857; }
+.minimum-card.minimum-negative { background: #fef2f2; border-color: #fecaca; }
+.minimum-card.minimum-negative strong { color: #b91c1c; }
+.minimum-progress-wrap { margin: 0 0 10px; }
+.minimum-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+.minimum-progress-fill { height: 100%; border-radius: inherit; transition: width .2s ease; }
+.minimum-progress-good { background: #10b981; }
+.minimum-progress-danger { background: #ef4444; }
+.minimum-progress-caption { margin-top: 5px; text-align: right; }
+.minimum-settings {
+  border-top: 1px solid #eef0f3;
+  border-bottom: 1px solid #eef0f3;
+  margin: 10px 0 12px;
+  padding: 9px 0;
+}
+.minimum-settings summary { cursor: pointer; font-weight: 700; }
+.minimum-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin: 10px 0 5px;
+}
+
+@media (max-width: 650px) {
+  .minimum-grid { grid-template-columns: 1fr; }
+  .minimum-form { grid-template-columns: 1fr; }
+  .minimum-form button { width: 100%; }
+  .minimum-progress-caption { text-align: left; }
+}
+
+/* v1.8.0 — email/password auth */
+.password-card {
+  display: grid;
+  gap: 12px;
+}
+.password-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.password-form input {
+  flex: 1 1 280px;
+}
+.password-form button {
+  white-space: nowrap;
+}
+.success-notice {
+  color: #047857;
+}
+
+@media (max-width: 620px) {
+  .password-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .password-form input,
+  .password-form button {
+    width: 100%;
+  }
 }
