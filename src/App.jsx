@@ -26,6 +26,8 @@ const DEFAULT_INCOME_CATEGORIES = [
   'Прочее',
 ]
 
+const DEFAULT_ACCOUNTS = ['Наличные', 'Банк 1', 'Банк 2']
+
 const PERIODS = [
   ['today', 'Сегодня'],
   ['this-week', 'Эта неделя'],
@@ -265,6 +267,11 @@ export default function App() {
   const [previousIncomes, setPreviousIncomes] = useState([])
   const [categories, setCategories] = useState([])
   const [incomeCategories, setIncomeCategories] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [accountBalances, setAccountBalances] = useState({})
+  const [transfers, setTransfers] = useState([])
+  const [accountError, setAccountError] = useState('')
+  const [transferError, setTransferError] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [categoryError, setCategoryError] = useState('')
@@ -286,18 +293,21 @@ export default function App() {
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [accountFilter, setAccountFilter] = useState('all')
   const [sortMode, setSortMode] = useState('date-desc')
 
   const [date, setDate] = useState(isoDate(new Date()))
   const [amount, setAmount] = useState('')
   const [category, setCategory] = useState(DEFAULT_CATEGORIES[0])
   const [note, setNote] = useState('')
+  const [expenseAccountId, setExpenseAccountId] = useState('')
   const [editingExpenseId, setEditingExpenseId] = useState(null)
 
   const [incomeDate, setIncomeDate] = useState(isoDate(new Date()))
   const [incomeAmount, setIncomeAmount] = useState('')
   const [incomeCategory, setIncomeCategory] = useState(DEFAULT_INCOME_CATEGORIES[0])
   const [incomeNote, setIncomeNote] = useState('')
+  const [incomeAccountId, setIncomeAccountId] = useState('')
   const [editingIncomeId, setEditingIncomeId] = useState(null)
   const [incomeSortMode, setIncomeSortMode] = useState('date-desc')
 
@@ -307,6 +317,18 @@ export default function App() {
   const [newIncomeCategory, setNewIncomeCategory] = useState('')
   const [editingIncomeCategoryId, setEditingIncomeCategoryId] = useState(null)
   const [editingIncomeCategoryName, setEditingIncomeCategoryName] = useState('')
+
+  const [newAccountName, setNewAccountName] = useState('')
+  const [newAccountOpeningBalance, setNewAccountOpeningBalance] = useState('')
+  const [editingAccountId, setEditingAccountId] = useState(null)
+  const [editingAccountName, setEditingAccountName] = useState('')
+  const [editingAccountOpeningBalance, setEditingAccountOpeningBalance] = useState('')
+
+  const [transferDate, setTransferDate] = useState(isoDate(new Date()))
+  const [transferAmount, setTransferAmount] = useState('')
+  const [transferFromAccountId, setTransferFromAccountId] = useState('')
+  const [transferToAccountId, setTransferToAccountId] = useState('')
+  const [transferNote, setTransferNote] = useState('')
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -327,6 +349,8 @@ export default function App() {
     loadIncomes()
     loadCategories()
     loadIncomeCategories()
+    loadAccounts()
+    loadTransfers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, period, customFrom, customTo])
 
@@ -346,6 +370,11 @@ export default function App() {
     [incomeCategories],
   )
 
+  const accountNameById = useMemo(
+    () => Object.fromEntries(accounts.map((item) => [item.id, item.name])),
+    [accounts],
+  )
+
   const allCategoryNames = useMemo(() => {
     const names = new Set(managedCategoryNames)
     for (const item of expenses) names.add(item.category)
@@ -363,6 +392,115 @@ export default function App() {
       setIncomeCategory(managedIncomeCategoryNames[0])
     }
   }, [managedIncomeCategoryNames, incomeCategory])
+
+  useEffect(() => {
+    if (!accounts.length) return
+    if (!accounts.some((item) => item.id === expenseAccountId)) setExpenseAccountId(accounts[0].id)
+    if (!accounts.some((item) => item.id === incomeAccountId)) setIncomeAccountId(accounts[0].id)
+    if (!accounts.some((item) => item.id === transferFromAccountId)) setTransferFromAccountId(accounts[0].id)
+    if (!accounts.some((item) => item.id === transferToAccountId) || transferToAccountId === transferFromAccountId) {
+      setTransferToAccountId(accounts.find((item) => item.id !== transferFromAccountId)?.id || accounts[0].id)
+    }
+  }, [accounts, expenseAccountId, incomeAccountId, transferFromAccountId, transferToAccountId])
+
+  async function loadAccounts() {
+    if (!session?.user) return
+    setAccountError('')
+
+    const { data, error: queryError } = await supabase
+      .from('budget_accounts')
+      .select('*')
+      .order('sort_order', { ascending: true })
+      .order('name', { ascending: true })
+
+    if (queryError) {
+      setAccountError(
+        queryError.message.includes('budget_accounts')
+          ? 'Нужно выполнить SQL-обновление базы данных для версии 1.6.0.'
+          : queryError.message,
+      )
+      return
+    }
+
+    let nextAccounts = data || []
+    if (nextAccounts.length === 0) {
+      const rows = DEFAULT_ACCOUNTS.map((name, index) => ({
+        user_id: session.user.id,
+        name,
+        opening_balance: 0,
+        sort_order: index,
+      }))
+      const { error: insertError } = await supabase.from('budget_accounts').insert(rows)
+      if (insertError) {
+        setAccountError(insertError.message)
+        return
+      }
+      const { data: created, error: reloadError } = await supabase
+        .from('budget_accounts')
+        .select('*')
+        .order('sort_order', { ascending: true })
+        .order('name', { ascending: true })
+      if (reloadError) {
+        setAccountError(reloadError.message)
+        return
+      }
+      nextAccounts = created || []
+    }
+
+    setAccounts(nextAccounts)
+
+    const [expensesResult, incomesResult, transfersResult] = await Promise.all([
+      supabase.from('budget_expenses').select('account_id, amount'),
+      supabase.from('budget_incomes').select('account_id, amount'),
+      supabase.from('budget_transfers').select('from_account_id, to_account_id, amount'),
+    ])
+
+    const balanceError = expensesResult.error || incomesResult.error || transfersResult.error
+    if (balanceError) {
+      setAccountError(
+        /budget_transfers|account_id/i.test(balanceError.message)
+          ? 'Нужно выполнить SQL-обновление базы данных для версии 1.6.0.'
+          : balanceError.message,
+      )
+      return
+    }
+
+    const balances = Object.fromEntries(nextAccounts.map((item) => [item.id, Number(item.opening_balance || 0)]))
+    for (const item of incomesResult.data || []) {
+      if (item.account_id && item.account_id in balances) balances[item.account_id] += Number(item.amount)
+    }
+    for (const item of expensesResult.data || []) {
+      if (item.account_id && item.account_id in balances) balances[item.account_id] -= Number(item.amount)
+    }
+    for (const item of transfersResult.data || []) {
+      if (item.from_account_id && item.from_account_id in balances) balances[item.from_account_id] -= Number(item.amount)
+      if (item.to_account_id && item.to_account_id in balances) balances[item.to_account_id] += Number(item.amount)
+    }
+    setAccountBalances(balances)
+  }
+
+  async function loadTransfers() {
+    if (!session?.user) return
+    setTransferError('')
+    const ranges = getPeriodRanges(period, customFrom, customTo)
+    let query = supabase
+      .from('budget_transfers')
+      .select('*')
+      .order('transferred_at', { ascending: false })
+      .order('created_at', { ascending: false })
+    if (ranges.current?.from) query = query.gte('transferred_at', ranges.current.from)
+    if (ranges.current?.to) query = query.lte('transferred_at', ranges.current.to)
+    const { data, error: queryError } = await query
+    if (queryError) {
+      setTransferError(
+        queryError.message.includes('budget_transfers')
+          ? 'Нужно выполнить SQL-обновление базы данных для версии 1.6.0.'
+          : queryError.message,
+      )
+      return
+    }
+    setTransfers(data || [])
+  }
 
   async function loadCategories() {
     setCategoryError('')
@@ -666,12 +804,13 @@ export default function App() {
     setAmount('')
     setNote('')
     if (managedCategoryNames.length) setCategory(managedCategoryNames[0])
+    if (accounts.length) setExpenseAccountId(accounts[0].id)
   }
 
   async function saveExpense(e) {
     e.preventDefault()
     const numericAmount = Number(String(amount).replace(',', '.'))
-    if (!date || !category || !numericAmount || numericAmount <= 0) return
+    if (!date || !category || !expenseAccountId || !numericAmount || numericAmount <= 0) return
 
     setError('')
     const payload = {
@@ -679,6 +818,7 @@ export default function App() {
       amount: numericAmount,
       category,
       note: note.trim() || null,
+      account_id: expenseAccountId,
     }
 
     let saveError = null
@@ -702,7 +842,7 @@ export default function App() {
     }
 
     resetExpenseForm()
-    await Promise.all([loadExpenses(), loadMonthlyBudget()])
+    await Promise.all([loadExpenses(), loadMonthlyBudget(), loadAccounts()])
   }
 
   function beginEditExpense(item) {
@@ -711,6 +851,7 @@ export default function App() {
     setAmount(String(item.amount).replace('.', ','))
     setCategory(item.category)
     setNote(item.note || '')
+    setExpenseAccountId(item.account_id || accounts[0]?.id || '')
     document.querySelector('.expense-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
@@ -722,7 +863,7 @@ export default function App() {
       return
     }
     if (editingExpenseId === id) resetExpenseForm()
-    await Promise.all([loadExpenses(), loadMonthlyBudget()])
+    await Promise.all([loadExpenses(), loadMonthlyBudget(), loadAccounts()])
   }
 
   function resetIncomeForm() {
@@ -731,12 +872,13 @@ export default function App() {
     setIncomeAmount('')
     setIncomeNote('')
     if (managedIncomeCategoryNames.length) setIncomeCategory(managedIncomeCategoryNames[0])
+    if (accounts.length) setIncomeAccountId(accounts[0].id)
   }
 
   async function saveIncome(e) {
     e.preventDefault()
     const numericAmount = Number(String(incomeAmount).replace(',', '.'))
-    if (!incomeDate || !incomeCategory || !numericAmount || numericAmount <= 0) return
+    if (!incomeDate || !incomeCategory || !incomeAccountId || !numericAmount || numericAmount <= 0) return
 
     setIncomeError('')
     const payload = {
@@ -744,6 +886,7 @@ export default function App() {
       amount: numericAmount,
       category: incomeCategory,
       note: incomeNote.trim() || null,
+      account_id: incomeAccountId,
     }
 
     let saveError = null
@@ -767,7 +910,7 @@ export default function App() {
     }
 
     resetIncomeForm()
-    await Promise.all([loadIncomes(), loadMonthlyBudget()])
+    await Promise.all([loadIncomes(), loadMonthlyBudget(), loadAccounts()])
   }
 
   function beginEditIncome(item) {
@@ -776,6 +919,7 @@ export default function App() {
     setIncomeAmount(String(item.amount).replace('.', ','))
     setIncomeCategory(item.category)
     setIncomeNote(item.note || '')
+    setIncomeAccountId(item.account_id || accounts[0]?.id || '')
     document.querySelector('.income-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
@@ -787,7 +931,125 @@ export default function App() {
       return
     }
     if (editingIncomeId === id) resetIncomeForm()
-    await Promise.all([loadIncomes(), loadMonthlyBudget()])
+    await Promise.all([loadIncomes(), loadMonthlyBudget(), loadAccounts()])
+  }
+
+  async function addAccount(e) {
+    e.preventDefault()
+    const name = newAccountName.trim()
+    if (!name) return
+    if (accounts.some((item) => item.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'))) {
+      setAccountError('Счёт с таким названием уже существует.')
+      return
+    }
+    const openingBalance = Number(String(newAccountOpeningBalance || '0').replace(',', '.'))
+    if (!Number.isFinite(openingBalance)) return
+    const nextOrder = accounts.reduce((max, item) => Math.max(max, item.sort_order || 0), -1) + 1
+    const { error: insertError } = await supabase.from('budget_accounts').insert({
+      user_id: session.user.id,
+      name,
+      opening_balance: openingBalance,
+      sort_order: nextOrder,
+    })
+    if (insertError) {
+      setAccountError(insertError.message)
+      return
+    }
+    setNewAccountName('')
+    setNewAccountOpeningBalance('')
+    await loadAccounts()
+  }
+
+  function beginEditAccount(item) {
+    setEditingAccountId(item.id)
+    setEditingAccountName(item.name)
+    setEditingAccountOpeningBalance(String(item.opening_balance || 0).replace('.', ','))
+    setAccountError('')
+  }
+
+  async function saveAccount(item) {
+    const name = editingAccountName.trim()
+    const openingBalance = Number(String(editingAccountOpeningBalance || '0').replace(',', '.'))
+    if (!name || !Number.isFinite(openingBalance)) return
+    if (accounts.some((account) => account.id !== item.id && account.name.toLocaleLowerCase('ru') === name.toLocaleLowerCase('ru'))) {
+      setAccountError('Счёт с таким названием уже существует.')
+      return
+    }
+    const { error: updateError } = await supabase
+      .from('budget_accounts')
+      .update({ name, opening_balance: openingBalance })
+      .eq('id', item.id)
+    if (updateError) {
+      setAccountError(updateError.message)
+      return
+    }
+    setEditingAccountId(null)
+    setEditingAccountName('')
+    setEditingAccountOpeningBalance('')
+    await loadAccounts()
+  }
+
+  async function deleteAccount(item) {
+    const [expenseUse, incomeUse, transferFromUse, transferToUse] = await Promise.all([
+      supabase.from('budget_expenses').select('id', { count: 'exact', head: true }).eq('account_id', item.id),
+      supabase.from('budget_incomes').select('id', { count: 'exact', head: true }).eq('account_id', item.id),
+      supabase.from('budget_transfers').select('id', { count: 'exact', head: true }).eq('from_account_id', item.id),
+      supabase.from('budget_transfers').select('id', { count: 'exact', head: true }).eq('to_account_id', item.id),
+    ])
+    const queryError = expenseUse.error || incomeUse.error || transferFromUse.error || transferToUse.error
+    if (queryError) {
+      setAccountError(queryError.message)
+      return
+    }
+    const used = (expenseUse.count || 0) + (incomeUse.count || 0) + (transferFromUse.count || 0) + (transferToUse.count || 0)
+    if (used > 0) {
+      setAccountError('Нельзя удалить счёт, по которому уже есть доходы, расходы или переводы. Его можно переименовать.')
+      return
+    }
+    if (!window.confirm(`Удалить счёт «${item.name}»?`)) return
+    const { error: deleteError } = await supabase.from('budget_accounts').delete().eq('id', item.id)
+    if (deleteError) {
+      setAccountError(deleteError.message)
+      return
+    }
+    if (accountFilter === item.id) setAccountFilter('all')
+    await loadAccounts()
+  }
+
+  async function saveTransfer(e) {
+    e.preventDefault()
+    const numericAmount = Number(String(transferAmount).replace(',', '.'))
+    if (!transferDate || !transferFromAccountId || !transferToAccountId || !numericAmount || numericAmount <= 0) return
+    if (transferFromAccountId === transferToAccountId) {
+      setTransferError('Выбери разные счета для перевода.')
+      return
+    }
+    setTransferError('')
+    const { error: insertError } = await supabase.from('budget_transfers').insert({
+      user_id: session.user.id,
+      transferred_at: transferDate,
+      amount: numericAmount,
+      from_account_id: transferFromAccountId,
+      to_account_id: transferToAccountId,
+      note: transferNote.trim() || null,
+    })
+    if (insertError) {
+      setTransferError(insertError.message)
+      return
+    }
+    setTransferAmount('')
+    setTransferNote('')
+    await Promise.all([loadTransfers(), loadAccounts()])
+  }
+
+  async function removeTransfer(id) {
+    if (!window.confirm('Удалить перевод?')) return
+    const { error: deleteError } = await supabase.from('budget_transfers').delete().eq('id', id)
+    if (deleteError) {
+      setTransferError(deleteError.message)
+      return
+    }
+    await Promise.all([loadTransfers(), loadAccounts()])
   }
 
   async function addCategory(e) {
@@ -1004,15 +1266,35 @@ export default function App() {
     await loadIncomeCategories()
   }
 
+  const accountFilteredExpenses = useMemo(() => {
+    if (accountFilter === 'all') return expenses
+    return expenses.filter((item) => item.account_id === accountFilter)
+  }, [expenses, accountFilter])
+
+  const accountFilteredPreviousExpenses = useMemo(() => {
+    if (accountFilter === 'all') return previousExpenses
+    return previousExpenses.filter((item) => item.account_id === accountFilter)
+  }, [previousExpenses, accountFilter])
+
+  const accountFilteredIncomes = useMemo(() => {
+    if (accountFilter === 'all') return incomes
+    return incomes.filter((item) => item.account_id === accountFilter)
+  }, [incomes, accountFilter])
+
+  const accountFilteredPreviousIncomes = useMemo(() => {
+    if (accountFilter === 'all') return previousIncomes
+    return previousIncomes.filter((item) => item.account_id === accountFilter)
+  }, [previousIncomes, accountFilter])
+
   const visibleExpenses = useMemo(() => {
-    if (categoryFilter === 'all') return expenses
-    return expenses.filter((item) => item.category === categoryFilter)
-  }, [expenses, categoryFilter])
+    if (categoryFilter === 'all') return accountFilteredExpenses
+    return accountFilteredExpenses.filter((item) => item.category === categoryFilter)
+  }, [accountFilteredExpenses, categoryFilter])
 
   const visiblePreviousExpenses = useMemo(() => {
-    if (categoryFilter === 'all') return previousExpenses
-    return previousExpenses.filter((item) => item.category === categoryFilter)
-  }, [previousExpenses, categoryFilter])
+    if (categoryFilter === 'all') return accountFilteredPreviousExpenses
+    return accountFilteredPreviousExpenses.filter((item) => item.category === categoryFilter)
+  }, [accountFilteredPreviousExpenses, categoryFilter])
 
   const sortedExpenses = useMemo(() => {
     const rows = [...visibleExpenses]
@@ -1032,7 +1314,7 @@ export default function App() {
   }, [visibleExpenses, sortMode])
 
   const sortedIncomes = useMemo(() => {
-    const rows = [...incomes]
+    const rows = [...accountFilteredIncomes]
     rows.sort((a, b) => {
       if (incomeSortMode === 'date-asc') {
         return a.received_at.localeCompare(b.received_at) || String(a.created_at).localeCompare(String(b.created_at))
@@ -1046,16 +1328,16 @@ export default function App() {
       return b.received_at.localeCompare(a.received_at) || String(b.created_at).localeCompare(String(a.created_at))
     })
     return rows
-  }, [incomes, incomeSortMode])
+  }, [accountFilteredIncomes, incomeSortMode])
 
   const cashflowStats = useMemo(() => {
-    const incomeTotal = incomes.reduce((sum, item) => sum + Number(item.amount), 0)
-    const expenseTotal = expenses.reduce((sum, item) => sum + Number(item.amount), 0)
+    const incomeTotal = accountFilteredIncomes.reduce((sum, item) => sum + Number(item.amount), 0)
+    const expenseTotal = accountFilteredExpenses.reduce((sum, item) => sum + Number(item.amount), 0)
     const balance = incomeTotal - expenseTotal
     const savingsRate = incomeTotal > 0 ? (balance / incomeTotal) * 100 : null
 
-    const previousIncomeTotal = previousIncomes.reduce((sum, item) => sum + Number(item.amount), 0)
-    const previousExpenseTotal = previousExpenses.reduce((sum, item) => sum + Number(item.amount), 0)
+    const previousIncomeTotal = accountFilteredPreviousIncomes.reduce((sum, item) => sum + Number(item.amount), 0)
+    const previousExpenseTotal = accountFilteredPreviousExpenses.reduce((sum, item) => sum + Number(item.amount), 0)
     const previousBalance = previousIncomeTotal - previousExpenseTotal
     const comparisonUnavailable = period === 'all' || (period === 'custom' && (!customFrom || !customTo))
     const balanceChange = comparisonUnavailable ? null : balance - previousBalance
@@ -1078,7 +1360,7 @@ export default function App() {
       incomeChange,
       incomeChangePercent,
     }
-  }, [incomes, expenses, previousIncomes, previousExpenses, period, customFrom, customTo])
+  }, [accountFilteredIncomes, accountFilteredExpenses, accountFilteredPreviousIncomes, accountFilteredPreviousExpenses, period, customFrom, customTo])
 
   const stats = useMemo(() => {
     const total = visibleExpenses.reduce((sum, item) => sum + Number(item.amount), 0)
@@ -1107,7 +1389,7 @@ export default function App() {
     const ranges = getPeriodRanges(period, customFrom, customTo)
     let dayCount = inclusiveDays(ranges.current?.from, ranges.current?.to)
     if (period === 'all') {
-      const datedRows = expenses.filter((item) => item.spent_at)
+      const datedRows = accountFilteredExpenses.filter((item) => item.spent_at)
       const earliest = datedRows.length
         ? datedRows.reduce((min, item) => item.spent_at < min ? item.spent_at : min, datedRows[0].spent_at)
         : null
@@ -1130,7 +1412,17 @@ export default function App() {
       dayCount,
       largestExpense,
     }
-  }, [visibleExpenses, visiblePreviousExpenses, expenses, period, customFrom, customTo])
+  }, [visibleExpenses, visiblePreviousExpenses, accountFilteredExpenses, period, customFrom, customTo])
+
+  const accountsTotal = useMemo(
+    () => accounts.reduce((sum, item) => sum + Number(accountBalances[item.id] || 0), 0),
+    [accounts, accountBalances],
+  )
+
+  const visibleTransfers = useMemo(() => {
+    if (accountFilter === 'all') return transfers
+    return transfers.filter((item) => item.from_account_id === accountFilter || item.to_account_id === accountFilter)
+  }, [transfers, accountFilter])
 
   const budgetStats = useMemo(() => {
     const spentTotal = monthExpenses.reduce((sum, item) => sum + Number(item.amount), 0)
@@ -1229,7 +1521,7 @@ export default function App() {
       <header className="topbar">
         <div>
           <h1>Мои деньги</h1>
-          <div className="muted small">Версия 1.5.2</div>
+          <div className="muted small">Версия 1.6.0</div>
         </div>
         <button className="secondary compact" onClick={() => supabase.auth.signOut()}>
           Выйти
@@ -1254,6 +1546,14 @@ export default function App() {
           </select>
         </div>
 
+        <div className="field">
+          <label>Счёт</label>
+          <select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}>
+            <option value="all">Все счета</option>
+            {accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+          </select>
+        </div>
+
         {period === 'custom' && (
           <>
             <div className="field">
@@ -1268,11 +1568,39 @@ export default function App() {
         )}
       </section>
 
+      <section className="card accounts-section">
+        <div className="accounts-head">
+          <div>
+            <div className="section-title accounts-title">Счета</div>
+            <div className="muted tiny">Текущий остаток с учётом доходов, расходов и переводов</div>
+          </div>
+          <div className="accounts-total">
+            <span className="muted tiny">Всего на счетах</span>
+            <strong>{formatMoney(accountsTotal)}</strong>
+          </div>
+        </div>
+        {accountError && <div className="error">{accountError}</div>}
+        <div className="accounts-grid">
+          {accounts.map((item) => (
+            <button
+              type="button"
+              className={`account-card ${accountFilter === item.id ? 'active-account' : ''}`}
+              key={item.id}
+              onClick={() => setAccountFilter(accountFilter === item.id ? 'all' : item.id)}
+            >
+              <span>{item.name}</span>
+              <strong>{formatMoney(accountBalances[item.id] || 0)}</strong>
+              <small className="muted">Начальный: {formatMoney(item.opening_balance || 0)}</small>
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="card cashflow-section">
         <div className="cashflow-head">
           <div>
             <div className="section-title cashflow-title">Баланс периода</div>
-            <div className="muted tiny">Доходы и расходы по всем категориям за выбранный период</div>
+            <div className="muted tiny">Доходы и расходы за выбранный период и выбранный счёт</div>
           </div>
           {cashflowStats.balanceChange !== null && (
             <div className="cashflow-dynamics">
@@ -1566,6 +1894,117 @@ export default function App() {
         )}
       </section>
 
+      <section className="card">
+        <details className="categories-details accounts-details">
+          <summary>Управление счетами</summary>
+          <div className="categories-body">
+            <form className="account-add-form" onSubmit={addAccount}>
+              <div className="field grow">
+                <label>Название счёта</label>
+                <input
+                  placeholder="Например, Revolut"
+                  value={newAccountName}
+                  onChange={(e) => setNewAccountName(e.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Начальный остаток, €</label>
+                <input
+                  inputMode="decimal"
+                  placeholder="0,00"
+                  value={newAccountOpeningBalance}
+                  onChange={(e) => setNewAccountOpeningBalance(e.target.value)}
+                />
+              </div>
+              <button className="primary compact">Добавить счёт</button>
+            </form>
+            {accountError && <div className="error">{accountError}</div>}
+            <div className="category-manage-list">
+              {accounts.map((item) => (
+                <div className="account-manage-item" key={item.id}>
+                  {editingAccountId === item.id ? (
+                    <>
+                      <div className="account-edit-fields">
+                        <input value={editingAccountName} onChange={(e) => setEditingAccountName(e.target.value)} autoFocus />
+                        <input
+                          inputMode="decimal"
+                          value={editingAccountOpeningBalance}
+                          onChange={(e) => setEditingAccountOpeningBalance(e.target.value)}
+                          aria-label="Начальный остаток"
+                        />
+                      </div>
+                      <div className="row-actions">
+                        <button type="button" className="primary compact" onClick={() => saveAccount(item)}>Сохранить</button>
+                        <button type="button" className="secondary compact" onClick={() => setEditingAccountId(null)}>Отмена</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <div className="muted tiny">Сейчас: {formatMoney(accountBalances[item.id] || 0)} · начальный: {formatMoney(item.opening_balance || 0)}</div>
+                      </div>
+                      <div className="row-actions">
+                        <button type="button" className="secondary compact" onClick={() => beginEditAccount(item)}>Изменить</button>
+                        <button type="button" className="danger compact" onClick={() => deleteAccount(item)}>Удалить</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <section className="card transfer-section">
+        <div className="section-title">Перевод между счетами</div>
+        <form className="expense-form transfer-form" onSubmit={saveTransfer}>
+          <div className="field">
+            <label>Дата</label>
+            <input type="date" value={transferDate} onChange={(e) => setTransferDate(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>Сумма, €</label>
+            <input inputMode="decimal" placeholder="0,00" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>Со счёта</label>
+            <select value={transferFromAccountId} onChange={(e) => setTransferFromAccountId(e.target.value)} required>
+              {accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>На счёт</label>
+            <select value={transferToAccountId} onChange={(e) => setTransferToAccountId(e.target.value)} required>
+              {accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+            </select>
+          </div>
+          <div className="field grow">
+            <label>Описание</label>
+            <input placeholder="Необязательно" value={transferNote} onChange={(e) => setTransferNote(e.target.value)} />
+          </div>
+          <button className="primary add-button">Перевести</button>
+        </form>
+        {transferError && <div className="error">{transferError}</div>}
+        {visibleTransfers.length > 0 && (
+          <div className="transfer-list">
+            {visibleTransfers.map((item) => (
+              <div className="transfer-item" key={item.id}>
+                <div>
+                  <strong>{accountNameById[item.from_account_id] || 'Счёт'} → {accountNameById[item.to_account_id] || 'Счёт'}</strong>
+                  <div className="muted small">{formatDate(item.transferred_at)}{item.note ? ` · ${item.note}` : ''}</div>
+                </div>
+                <div className="transfer-side">
+                  <strong>{formatMoney(item.amount)}</strong>
+                  <button type="button" className="danger compact" onClick={() => removeTransfer(item.id)}>Удалить</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       <section className={`card income-editor ${editingIncomeId ? 'editing-card income-editing-card' : ''}`}>
         <div className="section-title">
           {editingIncomeId ? 'Редактировать доход' : 'Добавить доход'}
@@ -1590,6 +2029,12 @@ export default function App() {
             <select value={incomeCategory} onChange={(e) => setIncomeCategory(e.target.value)} required>
               {managedIncomeCategoryNames.map((item) => <option key={item}>{item}</option>)}
               {!managedIncomeCategoryNames.includes(incomeCategory) && incomeCategory && <option>{incomeCategory}</option>}
+            </select>
+          </div>
+          <div className="field">
+            <label>Счёт</label>
+            <select value={incomeAccountId} onChange={(e) => setIncomeAccountId(e.target.value)} required>
+              {accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
             </select>
           </div>
           <div className="field grow">
@@ -1700,6 +2145,7 @@ export default function App() {
                   </div>
                   <div className="muted small expense-meta">
                     <span>{formatDate(item.received_at)}</span>
+                    {item.account_id && <><span className="meta-separator">·</span><span>{accountNameById[item.account_id] || 'Счёт'}</span></>}
                     {item.note && <><span className="meta-separator">·</span><span>{item.note}</span></>}
                   </div>
                 </div>
@@ -1741,6 +2187,12 @@ export default function App() {
             <select value={category} onChange={(e) => setCategory(e.target.value)} required>
               {managedCategoryNames.map((item) => <option key={item}>{item}</option>)}
               {!managedCategoryNames.includes(category) && category && <option>{category}</option>}
+            </select>
+          </div>
+          <div className="field">
+            <label>Счёт</label>
+            <select value={expenseAccountId} onChange={(e) => setExpenseAccountId(e.target.value)} required>
+              {accounts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
             </select>
           </div>
           <div className="field grow">
@@ -1852,6 +2304,7 @@ export default function App() {
                   </div>
                   <div className="muted small expense-meta">
                     <span>{formatDate(item.spent_at)}</span>
+                    {item.account_id && <><span className="meta-separator">·</span><span>{accountNameById[item.account_id] || 'Счёт'}</span></>}
                     {item.note && <><span className="meta-separator">·</span><span>{item.note}</span></>}
                   </div>
                 </div>
